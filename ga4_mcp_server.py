@@ -10,7 +10,7 @@ import json
 
 # Configuration from environment variables
 CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-GA4_PROPERTY_ID = os.getenv("GA4_PROPERTY_ID")
+GA4_PROPERTY_ID_DEFAULT = os.getenv("GA4_PROPERTY_ID")  # Default property ID from env var
 
 # Validate required environment variables
 if not CREDENTIALS_PATH:
@@ -18,16 +18,16 @@ if not CREDENTIALS_PATH:
     print("Please set it to the path of your service account JSON file", file=sys.stderr)
     sys.exit(1)
 
-if not GA4_PROPERTY_ID:
-    print("ERROR: GA4_PROPERTY_ID environment variable not set", file=sys.stderr)
-    print("Please set it to your GA4 property ID (e.g., 123456789)", file=sys.stderr)
-    sys.exit(1)
-
 # Validate credentials file exists
 if not os.path.exists(CREDENTIALS_PATH):
     print(f"ERROR: Credentials file not found: {CREDENTIALS_PATH}", file=sys.stderr)
     print("Please check the GOOGLE_APPLICATION_CREDENTIALS path", file=sys.stderr)
     sys.exit(1)
+
+# Note: GA4_PROPERTY_ID is now optional at startup - can be provided in queries
+if not GA4_PROPERTY_ID_DEFAULT:
+    print("WARNING: GA4_PROPERTY_ID environment variable not set", file=sys.stderr)
+    print("You will need to provide property_id parameter in each query", file=sys.stderr)
 
 # Initialize FastMCP
 mcp = FastMCP("Google Analytics 4")
@@ -437,6 +437,7 @@ def get_ga4_data(
     metrics=["totalUsers", "newUsers", "bounceRate", "screenPageViewsPerSession", "averageSessionDuration"],
     date_range_start="7daysAgo",
     date_range_end="yesterday",
+    property_id=None,  # NEW: Dynamic property ID parameter
     dimension_filter=None,
     # Enhanced functionality parameters
     estimate_only=False,
@@ -454,6 +455,7 @@ def get_ga4_data(
                  representation (e.g., "[\"totalUsers\"]" or "totalUsers,newUsers").
         date_range_start: Start date in YYYY-MM-DD format or relative date like '7daysAgo'.
         date_range_end: End date in YYYY-MM-DD format or relative date like 'yesterday'.
+        property_id: (Optional) GA4 Property ID. If not provided, uses GA4_PROPERTY_ID environment variable.
         dimension_filter: (Optional) JSON string or dict representing a GA4 FilterExpression. See GA4 API docs for structure.
         estimate_only: (Optional) If True, returns only the estimated row count without fetching data.
         proceed_with_large_dataset: (Optional) Set to True to proceed with queries that would return >1000 rows.
@@ -464,6 +466,12 @@ def get_ga4_data(
         List of dictionaries containing the requested data, warning dictionary for large datasets, or an error dictionary.
     """
     try:
+        # Determine which property ID to use
+        ga4_property_id = property_id if property_id else GA4_PROPERTY_ID_DEFAULT
+        
+        if not ga4_property_id:
+            return {"error": "No GA4 Property ID provided. Please provide property_id parameter or set GA4_PROPERTY_ID environment variable."}
+        
         # Handle cases where dimensions might be passed as a string from the MCP client
         parsed_dimensions = dimensions
         if isinstance(dimensions, str):
@@ -603,7 +611,7 @@ def get_ga4_data(
         if not proceed_with_large_dataset or estimate_only:
             try:
                 estimation_request = RunReportRequest(
-                    property=f"properties/{GA4_PROPERTY_ID}",
+                    property=f"properties/{ga4_property_id}",
                     dimensions=dimension_objects,
                     metrics=metric_objects,
                     date_ranges=[DateRange(start_date=date_range_start, end_date=date_range_end)],
@@ -636,7 +644,7 @@ def get_ga4_data(
 
         # GA4 API Call
         request = RunReportRequest(
-            property=f"properties/{GA4_PROPERTY_ID}",
+            property=f"properties/{ga4_property_id}",
             dimensions=dimension_objects,
             metrics=metric_objects,
             date_ranges=[DateRange(start_date=date_range_start, end_date=date_range_end)],
@@ -682,7 +690,8 @@ def get_ga4_data(
             "metadata": {
                 "total_rows": response.row_count,
                 "returned_rows": len(result),
-                "applied_optimizations": applied_optimizations
+                "applied_optimizations": applied_optimizations,
+                "property_id": ga4_property_id
             }
         }
     except Exception as e:
@@ -695,6 +704,10 @@ def get_ga4_data(
 def main():
     """Main entry point for the MCP server"""
     print("Starting GA4 MCP server...", file=sys.stderr)
+    if GA4_PROPERTY_ID_DEFAULT:
+        print(f"Default GA4 Property ID: {GA4_PROPERTY_ID_DEFAULT}", file=sys.stderr)
+    else:
+        print("No default GA4 Property ID set - property_id parameter required in queries", file=sys.stderr)
     mcp.run(transport="stdio")
 
 # Start the server when run directly
